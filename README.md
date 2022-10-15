@@ -12,7 +12,7 @@
 </p>
 
 Custom Wordlist Support Latest @pry0cc
-pry0cc released this Feb 12, 2021
+pry0cc released on Feb 12, 2021
 
 This release has shown several improvements including:
 
