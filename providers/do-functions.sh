@@ -4,21 +4,6 @@ AXIOM_PATH="$HOME/.axiom"
 source "$AXIOM_PATH/interact/includes/appliance.sh"
 LOG="$AXIOM_PATH/log.txt"
 
-poweron() {
-instance_name="$1"
-doctl compute droplet-action power-on $(instance_id $instance_name)
-}
-
-poweroff() {
-instance_name="$1"
-doctl compute droplet-action power-off $(instance_id $instance_name)
-}
-
-reboot(){
-instance_name="$1"
-doctl compute droplet-action reboot $(instance_id $instance_name)
-}
-
 # takes no arguments, outputs JSON object with instances
 instances() {
 	doctl compute droplet list -o json
@@ -32,18 +17,12 @@ instance_id() {
 # takes one argument, name of instance, returns raw IP address
 instance_ip() {
 	name="$1"
-	instances | jq -r ".[]? | select(.name==\"$name\") | .networks.v4[]? | select(.type==\"public\") | .ip_address"
+	instances | jq -r ".[] | select(.name==\"$name\") | .networks.v4[] | select(.type==\"public\") | .ip_address"
 }
 
 instance_ip_cache() {
 	name="$1"
-    config="$2"
-    ssh_config="$AXIOM_PATH/.sshconfig"
-
-    if [[ "$config" != "" ]]; then
-        ssh_config="$config"
-    fi
-    cat "$ssh_config" | grep -A 1 "$name" | awk '{ print $2 }' | tail -n 1
+	cat "$AXIOM_PATH"/.sshconfig | grep -A 1 "$name" | awk '{ print $2 }' | tail -n 1
 }
 
 instance_list() {
@@ -62,20 +41,11 @@ quick_ip() {
 }
 
 instance_pretty() {
-       data=$(instances)
+	data=$(instances)
 
-    #number of droplets
-    droplets=$(echo $data|jq -r '.[]|.name'|wc -l )
-
-    i=0
-    for f in $(echo $data | jq -r '.[].size.price_monthly'); do new=$(expr $i + $f); i=$new; done
-    totalPrice=$i
-    header="Instance,Primary Ip,Backend Ip,Region,Size,Status,\$/M"
-    fields=".[] | [.name, .networks.v4[0].ip_address, .networks.v4[1].ip_address, .region.slug, .size_slug, .status, .size.price_monthly] | @csv"
-    totals="_,_,_,Instances,$droplets,Total,\$$totalPrice"
-    #data is sorted by default by field name    
-    data=$(echo $data | jq  -r "$fields")
-    (echo "$header" && echo "$data" && echo $totals) | sed 's/"//g' | column -t -s, | perl -pe '$_ = "\033[0;37m$_\033[0;34m" if($. % 2)'
+	i=0
+	for f in $(echo $data | jq -r '.[].size.price_monthly'); do new=$(expr $i + $f); i=$new; done
+	(echo "Instance,IP,Region,Memory,\$/M" && echo $data | jq  -r '.[] | [.name, .networks.v4[-1].ip_address, .region.slug, .size_slug, .size.price_monthly] | @csv' && echo "_,_,_,Total,\$$i") | sed 's/"//g' | column -t -s, | perl -pe '$_ = "\033[0;37m$_\033[0;34m" if($. % 2)'
 }
 
 # identifies the selected instance/s
@@ -86,7 +56,7 @@ selected_instance() {
 get_image_id() {
 	query="$1"
 	images=$(doctl compute snapshot list -o json)
-	name=$(echo $images | jq -r ".[].name" | grep -wx "$query" | tail -n 1)
+	name=$(echo $images | jq -r ".[].name" | grep "$query" | tail -n 1)
 	id=$(echo $images |  jq -r ".[] | select(.name==\"$name\") | .id")
 	echo $id
 }
@@ -113,7 +83,7 @@ list_regions() {
 }
 
 regions() {
-    doctl compute region list -o json | jq -r '.[].slug'
+    doctl compute region list -o json
 }
 
 instance_sizes() {
@@ -146,12 +116,6 @@ snapshots() {
 	doctl compute snapshot list -o json
 }
 
-
-get_snapshots()
-{
-	doctl compute snapshot list
-}
-
 delete_record() {
     domain="$1"
     id="$2"
@@ -168,8 +132,11 @@ delete_record_force() {
 # Delete a snapshot by its name
 delete_snapshot() {
 	name="$1"
-	image_id=$(get_image_id "$name")
-	doctl compute snapshot delete "$image_id" -f
+
+	snapshot_data=$(snapshots)
+	snapshot_id=$(echo $snapshot_data | jq -r ".[] | select(.name==\"$snapshot\") | .id")
+	
+	doctl compute snapshot delete "$snapshot_id" -f
 }
 
 add_dns_record() {
@@ -234,14 +201,12 @@ query_instances() {
 
 query_instances_cache() {
 	selected=""
-    ssh_conf="$AXIOM_PATH/.sshconfig"
 
 	for var in "$@"; do
-        if [[ "$var" =~ "-F=" ]]; then
-            ssh_conf="$(echo "$var" | cut -d "=" -f 2)"
-        elif [[ "$var" =~ "*" ]]; then
+		if [[ "$var" =~ "*" ]]
+		then
 			var=$(echo "$var" | sed 's/*/.*/g')
-            selected="$selected $(cat "$ssh_conf" | grep "Host " | awk '{ print $2 }' | grep "$var")"
+			selected="$selected $(cat "$AXIOM_PATH"/.sshconfig | grep "Host " | awk '{ print $2 }' | grep "$var")"
 		else
 			if [[ $query ]];
 			then
@@ -254,7 +219,7 @@ query_instances_cache() {
 
 	if [[ "$query" ]]
 	then
-        selected="$selected $(cat "$ssh_conf" | grep "Host " | awk '{ print $2 }' | grep -w "$query")"
+		selected="$selected $(cat "$AXIOM_PATH"/.sshconfig | grep "Host " | awk '{ print $2 }' | grep -w "$query")"
 	else
 		if [[ ! "$selected" ]]
 		then
@@ -267,72 +232,37 @@ query_instances_cache() {
 	echo -n $selected
 }
 
-#  generate the SSH config depending on the key:value of generate_sshconfig in accout.json
-# 
+# take no arguments, generate a SSH config from the current Digitalocean layout
 generate_sshconfig() {
-accounts=$(ls -l "$AXIOM_PATH/accounts/" | grep "json" | grep -v 'total ' | awk '{ print $9 }' | sed 's/\.json//g')
-current=$(ls -lh ~/.axiom/axiom.json | awk '{ print $11 }' | tr '/' '\n' | grep json | sed 's/\.json//g') > /dev/null 2>&1
-sshnew="$AXIOM_PATH/.sshconfig.new$RANDOM"
-droplets="$(instances)"
-echo -n "" > $sshnew
-echo -e "\tServerAliveInterval 60\n" >> $sshnew
-sshkey="$(cat "$AXIOM_PATH/axiom.json" | jq -r '.sshkey')"
-echo -e "IdentityFile $HOME/.ssh/$sshkey" >> $sshnew
-generate_sshconfig="$(cat "$AXIOM_PATH/axiom.json" | jq -r '.generate_sshconfig')"
+	droplets="$(instances)"
+	echo -n "" > $AXIOM_PATH/.sshconfig.new
 
-if [[ "$generate_sshconfig" == "private" ]]; then
+	for name in $(echo "$droplets" | jq -r '.[].name')
+	do 
+		ip=$(echo "$droplets" | jq -r ".[] | select(.name==\"$name\") | .networks.v4[] | select(.type==\"public\") | .ip_address")
+		echo -e "Host $name\n\tHostName $ip\n\tUser op\n\tPort 2266\n" >> $AXIOM_PATH/.sshconfig.new
+    echo -e "ServerAliveInterval 60" >> $AXIOM_PATH/.sshconfig.new
+    echo -e "Host *\n\tControlMaster auto\n\tControlPath  ~/.ssh/sockets/%r@%h-%p\n\tControlPersist 600" >> $AXIOM_PATH/.sshconfig.new
 
- echo -e "Warning your SSH config generation toggle is set to 'Private' for account : $(echo $current)."
- echo -e "axiom will always attempt to SSH into the instances from their private backend network interface. To revert run: axiom-ssh --just-generate"
- for name in $(echo "$droplets" | jq -r '.[].name')
- do
- ip=$(echo "$droplets" | jq -r ".[] | select(.name==\"$name\") | .networks.v4[] | select(.type==\"private\") | .ip_address")
- if [[ -n "$ip" ]]; then
-  echo -e "Host $name\n\tHostName $ip\n\tUser op\n\tPort 2266\n" >> $sshnew
- fi 
- done
- mv $sshnew $AXIOM_PATH/.sshconfig
-
- elif [[ "$generate_sshconfig" == "cache" ]]; then 
- echo -e "Warning your SSH config generation toggle is set to 'Cache' for account : $(echo $current)."
- echo -e "axiom will never attempt to regenerate the SSH config. To revert run: axiom-ssh --just-generate"
+	done
+	mv $AXIOM_PATH/.sshconfig.new $AXIOM_PATH/.sshconfig
 	
- # If anything but "private" or "cache" is parsed from the generate_sshconfig in account.json, generate public IPs only
- #
- else
- for name in $(echo "$droplets" | jq -r '.[].name')
- do
- ip=$(echo "$droplets" | jq -r ".[] | select(.name==\"$name\") | .networks.v4[] | select(.type==\"public\") | .ip_address")
- if [[ -n "$ip" ]]; then
-  echo -e "Host $name\n\tHostName $ip\n\tUser op\n\tPort 2266\n" >> $sshnew
- fi
- done
- mv $sshnew $AXIOM_PATH/.sshconfig
-fi
-
-
- if [ "$key" != "null" ]
- then
- gen_app_sshconfig
- fi
+	if [ "$key" != "null" ]
+	then
+		gen_app_sshconfig
+	fi
 }
 
+# create an instance, name, image_id (the source), sizes_slug, or the size (e.g 1vcpu-1gb), region, boot_script (this is required for expiry)
 create_instance() {
 	name="$1"
 	image_id="$2"
 	size_slug="$3"
 	region="$4"
 	boot_script="$5"
-  sshkey="$(cat "$AXIOM_PATH/axiom.json" | jq -r '.sshkey')"
-  sshkey_fingerprint="$(ssh-keygen -l -E md5 -f ~/.ssh/$sshkey.pub | awk '{print $2}' | cut -d : -f 2-)"
-  keyid=$(doctl compute ssh-key import $sshkey \
-    --public-key-file ~/.ssh/$sshkey.pub \
-    --format ID \
-    --no-header 2>/dev/null) ||
-  keyid=$(doctl compute ssh-key list | grep "$sshkey_fingerprint" | awk '{ print $1 }')
-  
-  doctl compute droplet create "$name" --image "$image_id" --size "$size" --region "$region" --enable-ipv6 --user-data-file "$boot_script" --ssh-keys "$keyid" >/dev/null 2>&1
-  sleep 260
+
+	doctl compute droplet create "$name" --image "$image_id" --size "$size" --region "$region" --wait --user-data-file "$boot_script" 2>&1 >>/dev/null 
+	sleep 10
 }
 
 # Function used for splitting $src across $instances and rename the split files.
@@ -385,3 +315,5 @@ conf_check() {
 		generate_sshconfig	
 	fi
 }
+
+

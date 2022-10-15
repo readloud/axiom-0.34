@@ -4,22 +4,6 @@ AXIOM_PATH="$HOME/.axiom"
 source "$AXIOM_PATH/interact/includes/appliance.sh"
 LOG="$AXIOM_PATH/log.txt"
 
-
-poweron() {
-instance_name="$1"
-az vm start -g AXIOM -name $instance_name
-}
-
-poweroff() {
-instance_name="$1"
-az vm stop -g AXIOM --name  $instance_name
-}
-
-reboot(){
-instance_name="$1"
-az vm restart -g AXIOM --name $instance_name
-}
-
 # takes no arguments, outputs JSON object with instances
 instances() {
 	az vm list-ip-addresses
@@ -38,13 +22,7 @@ instance_ip() {
 
 instance_ip_cache() {
 	name="$1"
-    config="$2"
-    ssh_config="$AXIOM_PATH/.sshconfig"
-
-    if [[ "$config" != "" ]]; then
-        ssh_config="$config"
-    fi
-    cat "$ssh_config" | grep -A 1 "$name" | awk '{ print $2 }' | tail -n 1
+	cat "$AXIOM_PATH"/.sshconfig | grep -A 1 "$name" | awk '{ print $2 }' | tail -n 1
 }
 
 instance_list() {
@@ -69,22 +47,19 @@ create_instance() {
 	size_slug="$3"
 	region="$4"
 	boot_script="$5"
-  sshkey="$(cat "$AXIOM_PATH/axiom.json" | jq -r '.sshkey')"
 
-	#location="$(az account list-locations | jq -r ".[] | select(.name==\"$region\") | .displayName")"
-	location="$region"
-	az vm create --resource-group axiom --name "$name" --image "$image_id" --location "$location" --size "$size_slug" --tags "$name"=True --admin-username op --ssh-key-values ~/.ssh/$sshkey.pub  >/dev/null 2>&1 
-
+	location="$(az account list-locations | jq -r ".[] | select(.name==\"$region\") | .displayName")"
+	az vm create --resource-group axiom --name "$name" --image "$image_id" --location "$location" --size "$size_slug"  >/dev/null 2>&1 
 	az vm open-port --resource-group axiom --name "$name" --port 0-65535 >/dev/null 2>&1 
-	sleep 260
+	sleep 10
 }
 
 instance_pretty() {
 	data=$(instances)
-	extra_data=$(az vm list -d)
+	extra_data=$(az vm list)
 
 	(i=0
-	echo '"Instance","IP","Size","Region","Status","$M"'
+	echo '"Instance","IP","Size","Region","$M"'
 
 	for instance in $(echo $data | jq -c '.[].virtualMachine');
 	do
@@ -92,15 +67,14 @@ instance_pretty() {
 		name=$(echo $instance | jq -r '.name')
 		size=$(echo $extra_data | jq -r ".[] | select(.name==\"$name\") | .hardwareProfile.vmSize")
 		region=$(echo $extra_data | jq -r ".[] | select(.name==\"$name\") | .location")
-                power=$(echo $extra_data | jq -r ".[] | select(.name==\"$name\") | .powerState")
 		price_monthly=$(cat $AXIOM_PATH/pricing/azure.json | jq -r ".[].costs[] | select(.id==\"$size\") | .firstParty[].meters[].amount")
 		i=$(echo "$i+$price_monthly" | bc -l)
 
-		data=$(echo $instance | jq ".size=\"$size\"" | jq ".region=\"$region\"" | jq ".powerState=\"$power\""| jq ".price_monthly=\"$price_monthly\"")
-		echo $data | jq -r '[.name, .network.publicIpAddresses[].ipAddress, .size, .region, .powerState, .price_monthly] | @csv'
+		data=$(echo $instance | jq ".size=\"$size\"" | jq ".region=\"$region\"" | jq ".price_monthly=\"$price_monthly\"")
+		echo $data | jq -r '[.name, .network.publicIpAddresses[].ipAddress, .size, .region,.price_monthly] | @csv'
 	done
 
-	echo "\"_\",\"_\",\"_\",\"_\",\"Total\",\"\$$i\"") | column -t -s, | tr -d '"' | perl -pe '$_ = "\033[0;37m$_\033[0;34m" if($. % 2)'
+	echo "\"_\",\"_\",\"_\",\"Total\",\"\$$i\"") | column -t -s, | tr -d '"' | perl -pe '$_ = "\033[0;37m$_\033[0;34m" if($. % 2)'
 
 	i=0
 	#for f in $(echo $data | jq -r '.[].size.price_monthly'); do new=$(expr $i + $f); i=$new; done
@@ -115,7 +89,7 @@ selected_instance() {
 get_image_id() {
 	query="$1"
 	images=$(az image list)
-	name=$(echo $images | jq -r ".[].name" | grep -wx "$query" | tail -n 1)
+	name=$(echo $images | jq -r ".[].name" | grep "$query" | tail -n 1)
 	id=$(echo $images |  jq -r ".[] | select(.name==\"$name\") | .id")
 	echo $id
 }
@@ -125,22 +99,9 @@ delete_instance() {
     force="$2"
 
     if [ "$force" == "true" ]; then
-		# Does not delete all of the related resources like other platforms.
-        # az vm delete --name "$name" --resource-group axiom --yes --debug
-		# recommeded to delete resources by tags instead
-		az resource delete --ids $(az resource list --tag "$name"=True -otable --query "[].id" -otsv) >/dev/null 2>&1
-		
-		# when deleting a fleet, there is a virtual network left over from the first VM becuse it's used by the others
-		# need to figure out how to delete it...
-		
+        az vm delete --name "$name" --resource-group axiom --yes
     else
-    	# az vm delete --name "$name" --resource-group axiom
-		echo -e -n "  Are you sure you want to delete $name (y/N) - default NO: "
-		read ans
-		if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
-			echo -e "${Red}...deleting $name...${Color_Off}"
-			az resource delete --ids $(az resource list --tag "$name"=True -otable --query "[].id" -otsv) >/dev/null 2>&1
-		fi
+    	az vm delete --name "$name" --resource-group axiom
     fi
 }
 
@@ -150,7 +111,7 @@ instance_exists() {
 }
 
 list_regions() {
-    az account list-locations | jq -r '.[].name'
+    az account list-locations | jq -r '.[].displayName'
 }
 
 regions() {
@@ -158,21 +119,16 @@ regions() {
 }
 
 instance_sizes() {
-	location="$(jq -r '.region?' "$AXIOM_PATH/axiom.json")"
-    az vm list-sizes --location "$location"
+    az vm list-sizes --location "East US"
 }
 
 snapshots() {
 	az image list
 }
-
-get_snapshots() {
-	az image list --output table 
-}
-
 # Delete a snapshot by its name
 delete_snapshot() {
-	name="$1"	
+	name="$1"
+	
 	az image delete --name "$name" --resource-group axiom
 }
 
@@ -230,14 +186,12 @@ query_instances() {
 
 query_instances_cache() {
 	selected=""
-    ssh_conf="$AXIOM_PATH/.sshconfig"
 
 	for var in "$@"; do
-        if [[ "$var" =~ "-F=" ]]; then
-            ssh_conf="$(echo "$var" | cut -d "=" -f 2)"
-        elif [[ "$var" =~ "*" ]]; then
+		if [[ "$var" =~ "*" ]]
+		then
 			var=$(echo "$var" | sed 's/*/.*/g')
-            selected="$selected $(cat "$ssh_conf" | grep "Host " | awk '{ print $2 }' | grep "$var")"
+			selected="$selected $(cat "$AXIOM_PATH"/.sshconfig | grep "Host " | awk '{ print $2 }' | grep "$var")"
 		else
 			if [[ $query ]];
 			then
@@ -250,7 +204,7 @@ query_instances_cache() {
 
 	if [[ "$query" ]]
 	then
-        selected="$selected $(cat "$ssh_conf" | grep "Host " | awk '{ print $2 }' | grep -w "$query")"
+		selected="$selected $(cat "$AXIOM_PATH"/.sshconfig | grep "Host " | awk '{ print $2 }' | grep -w "$query")"
 	else
 		if [[ ! "$selected" ]]
 		then
@@ -265,21 +219,17 @@ query_instances_cache() {
 
 # take no arguments, generate a SSH config from the current Digitalocean layout
 generate_sshconfig() {
-	boxes="$(az vm list-ip-addresses --resource-group axiom)"
-        sshnew="$AXIOM_PATH/.sshconfig.new$RANDOM"
-	echo -n "" > "$sshnew"
-	echo -e "\tServerAliveInterval 60\n" >> $sshnew
-  sshkey="$(cat "$AXIOM_PATH/axiom.json" | jq -r '.sshkey')"
-  echo -e "IdentityFile $HOME/.ssh/$sshkey" >> $sshnew
+	boxes="$(az vm list-ip-addresses)"
+	echo -n "" > $AXIOM_PATH/.sshconfig.new
 
-    
 	for name in $(echo "$boxes" | jq -r '.[].virtualMachine.name')
 	do 
 		ip=$(echo "$boxes" | jq -r ".[].virtualMachine | select(.name==\"$name\") | .network.publicIpAddresses[].ipAddress")
-		echo -e "Host $name\n\tHostName $ip\n\tUser op\n\tPort 2266\n" >> $sshnew
-
+		echo -e "Host $name\n\tHostName $ip\n\tUser op\n\tPort 2266\n" >> $AXIOM_PATH/.sshconfig.new
+    echo -e "ServerAliveInterval 60" >> $AXIOM_PATH/.sshconfig.new
+    echo -e "Host *\n\tControlMaster auto\n\tControlPath  ~/.ssh/sockets/%r@%h-%p\n\tControlPersist 600" >> $AXIOM_PATH/.sshconfig.new
 	done
-	mv $sshnew $AXIOM_PATH/.sshconfig
+	mv $AXIOM_PATH/.sshconfig.new $AXIOM_PATH/.sshconfig
 	
 	if [ "$key" != "null" ]
 	then
@@ -306,27 +256,22 @@ conf_check() {
 list_dns() {
 	domain="$1"
 
-	echo "Needs conversion"
-	#doctl compute domain records list "$domain"
+	doctl compute domain records list "$domain"
 }
 
 list_domains_json() {
-
-	echo "Needs conversion"
-    #doctl compute domain list -o json
+    doctl compute domain list -o json
 }
 
 # List domains
 list_domains() {
-	echo "Needs conversion"
-	#doctl compute domain list
+	doctl compute domain list
 }
 
 list_subdomains() {
     domain="$1"
 
-	echo "Needs conversion"
-    #doctl compute domain records list $domain -o json | jq '.[]'
+    doctl compute domain records list $domain -o json | jq '.[]'
 }
 # get JSON data for snapshots
 
@@ -334,22 +279,21 @@ delete_record() {
     domain="$1"
     id="$2"
 
-	echo "Needs conversion"
-    #doctl compute domain records delete $domain $id
+    doctl compute domain records delete $domain $id
 }
 
 delete_record_force() {
     domain="$1"
     id="$2"
 
-    echo "Needs conversion"
-	#doctl compute domain records delete $domain $id -f
+    doctl compute domain records delete $domain $id -f
 }
 add_dns_record() {
     subdomain="$1"
     domain="$2"
     ip="$3"
 
-    echo "Needs conversion"
-	#doctl compute domain records create $domain --record-type A --record-name $subdomain --record-data $ip
+    doctl compute domain records create $domain --record-type A --record-name $subdomain --record-data $ip
 }
+
+

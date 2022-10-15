@@ -19,70 +19,6 @@ email=""
 # Packer::Azure CLI authentication will use the credential marked as isDefault
 use_azure_cli_auth="true"
 
-BASEOS="$(uname)"
-case $BASEOS in
-'Linux')
-    BASEOS='Linux'
-    ;;
-'FreeBSD')
-    BASEOS='FreeBSD'
-    alias ls='ls -G'
-    ;;
-'WindowsNT')
-    BASEOS='Windows'
-    ;;
-'Darwin')
-    BASEOS='Mac'
-    ;;
-'SunOS')
-    BASEOS='Solaris'
-    ;;
-'AIX') ;;
-*) ;;
-esac
-
-echo -e "${Blue}Installing azure az...${Color_Off}"
-if [ $BASEOS == "Mac" ]; then
-brew update && brew install azure-cli
-fi
-
-
-if [ $BASEOS == "Linux" ] ; then
-
-OS=$(lsb_release -i | awk '{ print $3 }')
-   if ! command -v lsb_release &> /dev/null; then
-            OS="unknown-Linux"
-            BASEOS="Linux"
-   fi
-sudo apt-get update -qq
-sudo apt-get install ca-certificates curl apt-transport-https lsb-release gnupg -y -qq
-AZ_REPO=$(lsb_release -cs)
-if [ $AZ_REPO == "kali-rolling" ]; then
-check_version=$(cat /proc/version | awk '{ print $6 $7 }' | tr -d '()' | cut -d . -f 1)
-case $check_version in                                
-  Debian10)
-    AZ_REPO="buster"
-    ;;
-  Debian11)
-    AZ_REPO="bullseye"
-    ;;
-  Debian12)
-    AZ_REPO="bookworm"
-    ;;
-  *)
-esac 
-fi
-curl -sL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/microsoft.gpg > /dev/null
-echo "deb [arch=amd64] https://packages.microsoft.com/repos/azure-cli/ $AZ_REPO main" | sudo tee /etc/apt/sources.list.d/azure-cli.list
-sudo apt-get update -qq
-sudo apt-get install azure-cli -y -qq
-fi
-
-if [[ $OS == "Arch" ]] || [[ $OS == "ManjaroLinux" ]]; then
-curl -L https://aka.ms/InstallAzureCli | bash
-fi
-
-
 echo -e -n "${Green}Please enter your default region: (Default 'eastus', press enter) \n>> ${Color_Off}"
 
 read region
@@ -103,7 +39,7 @@ fi
 az login
 az group create -n axiom -l "$region"
 
-bac=$(az ad sp create-for-rbac --role Contributor --query "{ client_id: appId, client_secret: password, tenant_id: tenant }")
+bac="$(az ad sp create-for-rbac --query "{ client_id: appId, client_secret: password, tenant_id: tenant }")" 
 client_id="$(echo $bac | jq -r '.client_id')"
 client_secret="$(echo $bac | jq -r '.client_secret')"
 tenant_id="$(echo $bac | jq -r '.tenant_id')"
@@ -126,7 +62,7 @@ if [[ "$ans" == "Y" ]]; then
     read appliance_key 
 fi
 
-data="$(echo "{\"client_id\":\"$client_id\",\"client_secret\":\"$client_secret\",\"tenant_id\":\"$tenant_id\",\"subscription_id\":\"$sub_id\",\"region\":\"$region\",\"resource_group\":\"axiom\",\"provider\":\"azure\",\"default_size\":\"$size\",\"appliance_name\":\"$appliance_name\",\"appliance_key\":\"$appliance_key\",\"appliance_url\":\"$appliance_url\", \"email\":\"$email\",\"use_azure_cli_auth\":\"$use_azure_cli_auth\"}")"
+data="$(echo "{\"client_id\":\"$client_id\",\"client_secret\":\"$client_secret\",\"tenant_id\":\"$tenant_id\",\"subscription_id\":\"$sub_id\",\"region\":\"$region\",\"resource_group\":\"axiom\",\"provider\":\"azure\",\"default_size\":\"$size\",\"appliance_name\":\"$appliance_name\",\"appliance_key\":\"$appliance_key\",\"appliance_url\":\"$appliance_url\", \"email\":\"$email\",\"use_azure_cli_auth\":$use_azure_cli_auth}")"
 
 echo -e "${BGreen}Profile settings below: ${Color_Off}"
 echo $data | jq

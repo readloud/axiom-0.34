@@ -5,7 +5,7 @@ source "$AXIOM_PATH/interact/includes/vars.sh"
 
 echo -e "${BWhite}Axiom Account Setup${Color_Off}"
 echo -e "${Blue}You can use this wizard to add new accounts, once made, use axiom-account to switch between profiles${Color_Off}"
-account_helpers=$(find "$AXIOM_PATH/interact/account-helpers" -name "*.sh" ! -name '*gcp*' ! -name "generate*" -execdir basename -s '.sh' {} +)
+account_helpers=$(find "$AXIOM_PATH/interact/account-helpers" | grep "\.sh"  | grep -v "generate" | tr '/' ' ' | awk '{ print $NF }' | tr -d '.sh')
 account_str=$(echo $account_helpers | sed 's/ /, /g')
 echo -e -n "${Green}Please enter your provider ($account_str): \n>> ${Color_Off}"
 read provider
@@ -19,3 +19,8 @@ do
 done
 
 bash "$provider_path"
+echo -e "${Blue}Now your account is setup, we need to run a build"
+echo "A build will take about 25 minutes, spin up a temporary instance, and then snapshot it to use for our future boxes"
+echo -e "Starting Build in 5 seconds... Ctrl+C to quit, remember, you can just type axiom-build at any time${Color_Off}"
+sleep 5
+bash "$AXIOM_PATH/interact/axiom-build"
